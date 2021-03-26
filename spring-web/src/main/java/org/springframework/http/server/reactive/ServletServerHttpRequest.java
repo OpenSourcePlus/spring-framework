@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2020 the original author or authors.
+ * Copyright 2002-2021 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,6 +43,7 @@ import org.springframework.core.io.buffer.DefaultDataBufferFactory;
 import org.springframework.http.HttpCookie;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.lang.NonNull;
 import org.springframework.lang.Nullable;
 import org.springframework.util.Assert;
 import org.springframework.util.CollectionUtils;
@@ -59,7 +60,7 @@ import org.springframework.util.StringUtils;
  */
 class ServletServerHttpRequest extends AbstractServerHttpRequest {
 
-	static final DataBuffer EOF_BUFFER = new DefaultDataBufferFactory().allocateBuffer(0);
+	static final DataBuffer EOF_BUFFER = DefaultDataBufferFactory.sharedInstance.allocateBuffer(0);
 
 
 	private final HttpServletRequest request;
@@ -71,6 +72,9 @@ class ServletServerHttpRequest extends AbstractServerHttpRequest {
 	private final DataBufferFactory bufferFactory;
 
 	private final byte[] buffer;
+
+	private final AsyncListener asyncListener;
+
 
 	public ServletServerHttpRequest(HttpServletRequest request, AsyncContext asyncContext,
 			String servletPath, DataBufferFactory bufferFactory, int bufferSize)
@@ -92,7 +96,7 @@ class ServletServerHttpRequest extends AbstractServerHttpRequest {
 		this.bufferFactory = bufferFactory;
 		this.buffer = new byte[bufferSize];
 
-		asyncContext.addListener(new RequestAsyncListener());
+		this.asyncListener = new RequestAsyncListener();
 
 		// Tomcat expects ReadListener registration on initial thread
 		ServletInputStream inputStream = request.getInputStream();
@@ -179,13 +183,15 @@ class ServletServerHttpRequest extends AbstractServerHttpRequest {
 	}
 
 	@Override
-	public InetSocketAddress getRemoteAddress() {
-		return new InetSocketAddress(this.request.getRemoteHost(), this.request.getRemotePort());
+	@NonNull
+	public InetSocketAddress getLocalAddress() {
+		return new InetSocketAddress(this.request.getLocalAddr(), this.request.getLocalPort());
 	}
 
 	@Override
-	public InetSocketAddress getLocalAddress() {
-		return new InetSocketAddress(this.request.getLocalAddr(), this.request.getLocalPort());
+	@NonNull
+	public InetSocketAddress getRemoteAddress() {
+		return new InetSocketAddress(this.request.getRemoteHost(), this.request.getRemotePort());
 	}
 
 	@Override
@@ -209,6 +215,22 @@ class ServletServerHttpRequest extends AbstractServerHttpRequest {
 	@Override
 	public Flux<DataBuffer> getBody() {
 		return Flux.from(this.bodyPublisher);
+	}
+
+	@SuppressWarnings("unchecked")
+	@Override
+	public <T> T getNativeRequest() {
+		return (T) this.request;
+	}
+
+	/**
+	 * Return an {@link RequestAsyncListener} that completes the request body
+	 * Publisher when the Servlet container notifies that request input has ended.
+	 * The listener is not actually registered but is rather exposed for
+	 * {@link ServletHttpHandlerAdapter} to ensure events are delegated.
+	 */
+	AsyncListener getAsyncListener() {
+		return this.asyncListener;
 	}
 
 	/**
@@ -240,12 +262,6 @@ class ServletServerHttpRequest extends AbstractServerHttpRequest {
 		if (rsReadLogger.isTraceEnabled()) {
 			rsReadLogger.trace(getLogPrefix() + "Read " + read + (read != -1 ? " bytes" : ""));
 		}
-	}
-
-	@SuppressWarnings("unchecked")
-	@Override
-	public <T> T getNativeRequest() {
-		return (T) this.request;
 	}
 
 
